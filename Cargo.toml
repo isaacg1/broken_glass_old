@@ -1,0 +1,7 @@
+[package]
+name = "broken_glass"
+version = "0.1.0"
+authors = ["Isaac Grosof <igrosof@cmu.edu>"]
+
+[dependencies]
+svg = "*"
