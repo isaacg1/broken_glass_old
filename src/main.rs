@@ -8,8 +8,7 @@ fn main() {
 		.move_to((10, 10))
 		.line_by((0, 50))
 		.line_by((50, 0))
-		.line_by((0, -50))
-		.close();
+		.line_by((0, -50));
 
 	let path = Path::new()
 		.set("fill", "none")
