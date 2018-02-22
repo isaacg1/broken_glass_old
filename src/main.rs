@@ -22,6 +22,7 @@ fn main() {
         .set("cx", 35)
         .set("cy", 35)
         .set("r", 10)
+        .set("fill", "none")
         .set("stroke", "blue")
         .set("stroke-width", 5);
 
