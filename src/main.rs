@@ -14,7 +14,7 @@ fn main() {
         .set("r", SIZE)
         .set("fill", "none")
         .set("stroke", "black")
-        .set("stroke-width", 1);
+        .set("stroke-width", 2);
 
 	let document = Document::new()
 		.set("viewBox", (0, 0, SIZE * 2 + OFFSET * 2, SIZE * 2 + OFFSET * 2))
