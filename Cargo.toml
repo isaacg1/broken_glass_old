@@ -5,3 +5,4 @@ authors = ["Isaac Grosof <igrosof@cmu.edu>"]
 
 [dependencies]
 svg = "*"
+rand = "*"
