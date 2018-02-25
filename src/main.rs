@@ -10,7 +10,7 @@ use rand::Rng;
 
 use std::f64::consts::PI;
 
-const SIZE: u64 = 200;
+const SIZE: u64 = 400;
 const OFFSET: u64 = 20;
 
 type Point = (f64, f64);
@@ -267,7 +267,6 @@ fn break_glass(document: Document, n: usize) -> Document {
         document = document.add(draw_line(segment.line));
         let maybe_index = surrounding_poly_index(&segment, &mut polys);
         let surrounding_poly = maybe_index.map(|i| polys.remove(i));
-        println!("{} {:?}", i, surrounding_poly);
         let (poly1, poly2) = split_poly(&segment, segments.len(), &surrounding_poly);
         if poly1.closed {
             document = document.add(draw_poly(&poly1, &mut rng).unwrap());
@@ -298,7 +297,7 @@ fn main() {
         )
         .add(circle);
 
-    let document = break_glass(document, 100);
+    let document = break_glass(document, 1000);
 
     svg::save("image.svg", &document).unwrap();
 }
