@@ -89,6 +89,7 @@ fn between(a: f64, b: f64, c: f64) -> bool {
     a <= b && b <= c || a >= b && b >= c
 }
 
+#[derive(Debug)]
 struct Segment {
     line: Line,
     low_x_neighbor_index: Option<usize>,
@@ -120,46 +121,71 @@ fn random_segment<R: Rng>(line: Line, segments: &Vec<Segment>, rng: &mut R) -> S
     }
 }
 
+// Lines overlap, open is to the + side.
 #[derive(Clone, Debug)]
 struct Poly {
     lines_and_segment_indexes: Vec<(Line, usize)>,
     closed: bool,
 }
 
+fn on_left_side(line: Line, point: Point) -> bool {
+    let along_line = (line.1 .0 - line.0 .0, line.1 .1 - line.0 .1);
+    let perp_line = (along_line.1, -along_line.0);
+    let offset = (point.0 - line.0 .0, point.1 - line.0 .1);
+    let distance = offset.0 * perp_line.0 + offset.1 * perp_line.1;
+    distance > 0.
+}
+
 // Add posibility of 2 surrounding polys,
 // from point two disjoint circle edge polys.
 // Would happen from poly defined on both sides,
 // in two different polys.
-fn surrounding_poly_index(segment: &Segment, polys: &Vec<Poly>) -> Option<usize> {
+fn surrounding_poly_index(segment: &Segment, polys: &Vec<Poly>) -> Vec<usize> {
     if segment.low_x_neighbor_index.is_none() && segment.high_x_neighbor_index.is_none() {
-        None
+        vec![]
     } else {
-        polys.iter().position(|poly| {
-            segment.low_x_neighbor_index.map_or(!poly.closed, |low_index| {
-                poly.lines_and_segment_indexes
-                    .iter()
-                    .any(|&(line, segment_index)| {
-                        segment_index == low_index
-                            && between(line.0 .0, segment.line.0 .0, line.1 .0)
-                    })
-            }) && segment.high_x_neighbor_index.map_or(!poly.closed, |high_index| {
-                poly.lines_and_segment_indexes
-                    .iter()
-                    .any(|&(line, segment_index)| {
-                        segment_index == high_index
-                            && between(line.0 .0, segment.line.1 .0, line.1 .0)
-                    })
+        let surroundings: Vec<usize> = polys
+            .iter()
+            .enumerate()
+            .filter(|&(_, poly)| {
+                segment.low_x_neighbor_index.map_or(false, |low_index| {
+                    poly.lines_and_segment_indexes
+                        .iter()
+                        .any(|&(line, segment_index)| {
+                            segment_index == low_index
+                                && between(line.0 .0, segment.line.0 .0, line.1 .0)
+                                && on_left_side(line, segment.line.1)
+                        })
+                }) || segment.high_x_neighbor_index.map_or(false, |high_index| {
+                    poly.lines_and_segment_indexes
+                        .iter()
+                        .any(|&(line, segment_index)| {
+                            segment_index == high_index
+                                && between(line.0 .0, segment.line.1 .0, line.1 .0)
+                                && on_left_side(line, segment.line.0)
+                        })
+                })
             })
-        })
+            .map(|(i, _)| i)
+            .collect();
+        println!("{:?}", surroundings);
+        assert!(
+            surroundings.len() == 2 && segment.low_x_neighbor_index.is_some()
+                && segment.high_x_neighbor_index.is_some() || surroundings.len() == 1
+        );
+        surroundings
     }
 }
 
 fn split_poly(
     segment: &Segment,
     segment_index: usize,
-    surrounding_poly: &Option<Poly>,
+    surrounding_polys: &Vec<Poly>,
 ) -> (Poly, Poly) {
-    if let &Some(ref poly) = surrounding_poly {
+    println!("{:?}", segment);
+    println!("{:?}", surrounding_polys);
+    if surrounding_polys.len() == 1 {
+        let poly = &surrounding_polys[0];
         if let (Some(low_index), Some(high_index)) =
             (segment.low_x_neighbor_index, segment.high_x_neighbor_index)
         {
@@ -215,7 +241,11 @@ fn split_poly(
                 assert!(segment.high_x_neighbor_index.is_none());
                 (low_index, segment.line.0, segment.line.1)
             } else {
-                (segment.high_x_neighbor_index.unwrap(), segment.line.1, segment.line.0)
+                (
+                    segment.high_x_neighbor_index.unwrap(),
+                    segment.line.1,
+                    segment.line.0,
+                )
             };
             let pos = poly.lines_and_segment_indexes
                 .iter()
@@ -237,9 +267,10 @@ fn split_poly(
                 }
             };
             let max_poly = {
-                let mut max_lis = piece_2.to_vec();
-                max_lis.insert(0, (med_max_line, med_li.1));
-                max_lis.insert(0, ((non_point, point), segment_index));
+                let mut max_lis = vec!();
+                max_lis.push(((non_point, point), segment_index));
+                max_lis.push((med_max_line, med_li.1));
+                max_lis.extend(piece_2); 
                 Poly {
                     lines_and_segment_indexes: max_lis,
                     closed: false,
@@ -247,12 +278,71 @@ fn split_poly(
             };
             (min_poly, max_poly)
         }
-    } else {
-        let poly = Poly {
+    } else if surrounding_polys.is_empty() {
+        let poly1 = Poly {
             lines_and_segment_indexes: vec![(segment.line, segment_index)],
             closed: false,
         };
-        (poly.clone(), poly.clone())
+        let poly2 = Poly {
+            lines_and_segment_indexes: vec![((segment.line.1, segment.line.0), segment_index)],
+            closed: false,
+        };
+        (poly1, poly2)
+    } else {
+        assert_eq!(surrounding_polys.len(), 2);
+        let low_index = segment.low_x_neighbor_index.unwrap();
+        let high_index = segment.high_x_neighbor_index.unwrap();
+        let mut poly_index_points = vec![];
+        for poly in surrounding_polys {
+            for (target_poly_index, point) in
+                vec![(low_index, segment.line.0), (high_index, segment.line.1)]
+            {
+                for (out_index, &(line, poly_index)) in
+                    poly.lines_and_segment_indexes.iter().enumerate()
+                {
+                    if target_poly_index == poly_index && between(line.0 .0, point.0, line.1 .0) {
+                        poly_index_points.push((poly, out_index, point))
+                    }
+                }
+            }
+        }
+        println!("{:?}", poly_index_points);
+        assert_eq!(poly_index_points.len(), 2);
+        let (poly1, index1, point1) = poly_index_points[0];
+        let (poly2, index2, point2) = poly_index_points[1];
+        assert!(!poly1.closed);
+        assert!(!poly2.closed);
+        let (piece11, piece12p) = poly1.lines_and_segment_indexes.split_at(index1);
+        let (med_lis1, piece12) = piece12p.split_at(1);
+        let (med_line1, med_index1) = med_lis1[0];
+        let (piece21, piece22p) = poly2.lines_and_segment_indexes.split_at(index2);
+        let (med_lis2, piece22) = piece22p.split_at(1);
+        let (med_line2, med_index2) = med_lis2[0];
+        let out_poly1 = {
+            let mut out_lis1: Vec<(Line, usize)> = vec![];
+            out_lis1.extend(piece11);
+            out_lis1.push(((med_line1.0, point1), med_index1));
+            out_lis1.push(((point1, point2), segment_index));
+            out_lis1.push(((point2, med_line2.1), med_index2));
+            out_lis1.extend(piece22);
+            Poly {
+                lines_and_segment_indexes: out_lis1,
+                closed: false,
+            }
+        };
+        let out_poly2 = {
+            let mut out_lis2: Vec<(Line, usize)> = vec![];
+            out_lis2.extend(piece21);
+            out_lis2.push(((med_line2.0, point2), med_index2));
+            out_lis2.push(((point2, point1), segment_index));
+            out_lis2.push(((point1, med_line1.1), med_index1));
+            out_lis2.extend(piece12);
+            Poly {
+                lines_and_segment_indexes: out_lis2,
+                closed: false,
+            }
+        };
+        (out_poly1, out_poly2)
     }
 }
 
@@ -261,13 +351,15 @@ fn break_glass(document: Document, n: usize) -> Document {
     let mut segments = vec![];
     let mut polys = vec![];
     let mut rng = thread_rng();
-    for i in 0..n {
+    for _i in 0..n {
         let line = random_line();
         let segment = random_segment(line, &segments, &mut rng);
         document = document.add(draw_line(segment.line));
         let maybe_index = surrounding_poly_index(&segment, &mut polys);
-        let surrounding_poly = maybe_index.map(|i| polys.remove(i));
-        let (poly1, poly2) = split_poly(&segment, segments.len(), &surrounding_poly);
+        let surrounding_polys: Vec<Poly> =
+            // Must be reversed so we don't remove the wrong one
+            maybe_index.into_iter().rev().map(|i| polys.remove(i)).collect();
+        let (poly1, poly2) = split_poly(&segment, segments.len(), &surrounding_polys);
         if poly1.closed {
             document = document.add(draw_poly(&poly1, &mut rng).unwrap());
         }
