@@ -45,7 +45,8 @@ fn draw_poly(poly: &Poly) -> Option<Path> {
         data = data.close();
 
         let poly_color = poly.color.unwrap();
-        let color = format!("#{:X}{:X}{:X}", poly_color.0, poly_color.1, poly_color.2);
+        let color = format!("#{:02X}{:02X}{:02X}", poly_color.0, poly_color.1, poly_color.2);
+        assert_eq!(color.len(), 7);
         let path = Path::new()
             .set("fill", color.to_string())
             .set("stroke", color)
