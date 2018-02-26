@@ -377,14 +377,12 @@ fn split_poly(
 }
 
 fn break_glass(document: Document, n: usize) -> Document {
-    let mut document = document;
     let mut segments = vec![];
     let mut polys = vec![];
     let mut rng = thread_rng();
     for i in 0..n {
         let line = random_line();
         let segment = random_segment(line, &segments, &mut rng);
-        document = document.add(draw_line(segment.line));
         let maybe_index = surrounding_poly_index(&segment, &mut polys);
         let surrounding_polys: Vec<Poly> =
             // Must be reversed so we don't remove the wrong one
@@ -398,15 +396,18 @@ fn break_glass(document: Document, n: usize) -> Document {
         let age = i as f64/n as f64;
         poly1.add_color(maybe_old_color, age);
         poly2.add_color(maybe_old_color, age);
-        if poly1.closed {
-            document = document.add(draw_poly(&poly1).unwrap());
-        }
-        if poly2.closed {
-            document = document.add(draw_poly(&poly2).unwrap());
-        }
         polys.push(poly1);
         polys.push(poly2);
         segments.push(segment);
+    }
+    let mut document = document;
+    for segment in segments {
+        document = document.add(draw_line(segment.line));
+    };
+    for poly in polys {
+        if poly.closed {
+            document = document.add(draw_poly(&poly).unwrap());
+        }
     }
     document
 }
