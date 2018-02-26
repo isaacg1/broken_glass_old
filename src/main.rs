@@ -12,6 +12,7 @@ use std::f64::consts::PI;
 
 const SIZE: u64 = 400;
 const OFFSET: u64 = 20;
+const COLOR_JITTER: i16 = 64;
 
 type Point = (f64, f64);
 type Line = (Point, Point);
@@ -35,7 +36,7 @@ fn draw_line(line: Line) -> Path {
     path
 }
 
-fn draw_poly<R: Rng>(poly: &Poly, rng: &mut R) -> Option<Path> {
+fn draw_poly(poly: &Poly) -> Option<Path> {
     if poly.closed {
         let mut data = Data::new().move_to(transform(poly.lines_and_segment_indexes[0].0 .0));
         for &(line, _) in &poly.lines_and_segment_indexes {
@@ -43,12 +44,8 @@ fn draw_poly<R: Rng>(poly: &Poly, rng: &mut R) -> Option<Path> {
         }
         data = data.close();
 
-        let color = format!(
-            "#{:X}{:X}{:X}",
-            rng.gen_range(0, 256),
-            rng.gen_range(0, 256),
-            rng.gen_range(0, 256)
-        );
+        let poly_color = poly.color.unwrap();
+        let color = format!("#{:X}{:X}{:X}", poly_color.0, poly_color.1, poly_color.2);
         let path = Path::new()
             .set("fill", color.to_string())
             .set("stroke", color)
@@ -121,11 +118,40 @@ fn random_segment<R: Rng>(line: Line, segments: &Vec<Segment>, rng: &mut R) -> S
     }
 }
 
+type Color = (u8, u8, u8);
 // Lines overlap, open is to the + side.
 #[derive(Clone, Debug)]
 struct Poly {
     lines_and_segment_indexes: Vec<(Line, usize)>,
     closed: bool,
+    color: Option<Color>,
+}
+
+fn jitter(color_channel: u8, age: f64) -> u8 {
+    let current_jitter = (COLOR_JITTER as f64 * (1.-age)) as i16;
+    (color_channel as i16 + thread_rng().gen_range(-current_jitter, current_jitter+1))
+        .max(0)
+        .min(255) as u8
+}
+
+impl Poly {
+    fn add_color(&mut self, maybe_old_color: Option<Color>, age: f64) {
+        assert!(self.color.is_none());
+        self.color = Some(if let Some(old_color) = maybe_old_color {
+            (
+                jitter(old_color.0, age),
+                jitter(old_color.1, age),
+                jitter(old_color.2, age),
+            )
+        } else {
+            let mut rng = thread_rng();
+            (
+                rng.gen_range(0, 256) as u8,
+                rng.gen_range(0, 256) as u8,
+                rng.gen_range(0, 256) as u8,
+            )
+        });
+    }
 }
 
 fn on_left_side(line: Line, point: Point) -> bool {
@@ -168,7 +194,6 @@ fn surrounding_poly_index(segment: &Segment, polys: &Vec<Poly>) -> Vec<usize> {
             })
             .map(|(i, _)| i)
             .collect();
-        println!("{:?}", surroundings);
         assert!(
             surroundings.len() == 2 && segment.low_x_neighbor_index.is_some()
                 && segment.high_x_neighbor_index.is_some() || surroundings.len() == 1
@@ -182,8 +207,6 @@ fn split_poly(
     segment_index: usize,
     surrounding_polys: &Vec<Poly>,
 ) -> (Poly, Poly) {
-    println!("{:?}", segment);
-    println!("{:?}", surrounding_polys);
     if surrounding_polys.len() == 1 {
         let poly = &surrounding_polys[0];
         if let (Some(low_index), Some(high_index)) =
@@ -221,6 +244,7 @@ fn split_poly(
                 Poly {
                     lines_and_segment_indexes: outer_lis,
                     closed: poly.closed,
+                    color: None,
                 }
             };
             let inner_poly = {
@@ -232,6 +256,7 @@ fn split_poly(
                 Poly {
                     lines_and_segment_indexes: inner_lis,
                     closed: true,
+                    color: None,
                 }
             };
             (inner_poly, outer_poly)
@@ -264,16 +289,18 @@ fn split_poly(
                 Poly {
                     lines_and_segment_indexes: min_lis,
                     closed: false,
+                    color: None,
                 }
             };
             let max_poly = {
-                let mut max_lis = vec!();
+                let mut max_lis = vec![];
                 max_lis.push(((non_point, point), segment_index));
                 max_lis.push((med_max_line, med_li.1));
-                max_lis.extend(piece_2); 
+                max_lis.extend(piece_2);
                 Poly {
                     lines_and_segment_indexes: max_lis,
                     closed: false,
+                    color: None,
                 }
             };
             (min_poly, max_poly)
@@ -282,10 +309,12 @@ fn split_poly(
         let poly1 = Poly {
             lines_and_segment_indexes: vec![(segment.line, segment_index)],
             closed: false,
+            color: None,
         };
         let poly2 = Poly {
             lines_and_segment_indexes: vec![((segment.line.1, segment.line.0), segment_index)],
             closed: false,
+            color: None,
         };
         (poly1, poly2)
     } else {
@@ -306,7 +335,6 @@ fn split_poly(
                 }
             }
         }
-        println!("{:?}", poly_index_points);
         assert_eq!(poly_index_points.len(), 2);
         let (poly1, index1, point1) = poly_index_points[0];
         let (poly2, index2, point2) = poly_index_points[1];
@@ -328,6 +356,7 @@ fn split_poly(
             Poly {
                 lines_and_segment_indexes: out_lis1,
                 closed: false,
+                color: None,
             }
         };
         let out_poly2 = {
@@ -340,6 +369,7 @@ fn split_poly(
             Poly {
                 lines_and_segment_indexes: out_lis2,
                 closed: false,
+                color: None,
             }
         };
         (out_poly1, out_poly2)
@@ -351,7 +381,7 @@ fn break_glass(document: Document, n: usize) -> Document {
     let mut segments = vec![];
     let mut polys = vec![];
     let mut rng = thread_rng();
-    for _i in 0..n {
+    for i in 0..n {
         let line = random_line();
         let segment = random_segment(line, &segments, &mut rng);
         document = document.add(draw_line(segment.line));
@@ -359,12 +389,20 @@ fn break_glass(document: Document, n: usize) -> Document {
         let surrounding_polys: Vec<Poly> =
             // Must be reversed so we don't remove the wrong one
             maybe_index.into_iter().rev().map(|i| polys.remove(i)).collect();
-        let (poly1, poly2) = split_poly(&segment, segments.len(), &surrounding_polys);
+        let (mut poly1, mut poly2) = split_poly(&segment, segments.len(), &surrounding_polys);
+        let maybe_old_color = if surrounding_polys.len() == 1 {
+            surrounding_polys[0].color
+        } else {
+            None
+        };
+        let age = i as f64/n as f64;
+        poly1.add_color(maybe_old_color, age);
+        poly2.add_color(maybe_old_color, age);
         if poly1.closed {
-            document = document.add(draw_poly(&poly1, &mut rng).unwrap());
+            document = document.add(draw_poly(&poly1).unwrap());
         }
         if poly2.closed {
-            document = document.add(draw_poly(&poly2, &mut rng).unwrap());
+            document = document.add(draw_poly(&poly2).unwrap());
         }
         polys.push(poly1);
         polys.push(poly2);
