@@ -405,16 +405,29 @@ fn break_glass(n: usize) -> Vec<Poly> {
 }
 
 fn main() {
-    let polys = break_glass(1000);
     let mut document = Document::new()
         .set(
             "viewBox",
             (0, 0, SIZE * 2 + OFFSET * 2, SIZE * 2 + OFFSET * 2),
         );
+    let background_box = Data::new()
+        .move_to((0, 0))
+        .line_by((0, SIZE * 2 + OFFSET * 2))
+        .line_by((SIZE * 2 + OFFSET * 2, 0))
+        .line_by((0, -((SIZE * 2 + OFFSET * 2) as i64)))
+        .close();
+
+    let background = Path::new()
+        .set("fill", "black")
+        .set("d", background_box);
+    document = document.add(background);
+
+    let polys = break_glass(1000);
     for poly in polys {
         if poly.closed {
             document = document.add(draw_poly(&poly).unwrap());
         }
     }
+
     svg::save("image.svg", &document).unwrap();
 }
