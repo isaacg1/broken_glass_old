@@ -50,7 +50,7 @@ fn draw_poly(poly: &Poly) -> Option<Path> {
         let path = Path::new()
             .set("fill", color.to_string())
             .set("stroke", color)
-            .set("stroke-width", 1)
+            .set("stroke-width", 0)
             .set("d", data);
         Some(path)
     } else {
@@ -377,7 +377,7 @@ fn split_poly(
     }
 }
 
-fn break_glass(document: Document, n: usize) -> Document {
+fn break_glass(n: usize) -> Vec<Poly> {
     let mut segments = vec![];
     let mut polys = vec![];
     let mut rng = thread_rng();
@@ -401,35 +401,20 @@ fn break_glass(document: Document, n: usize) -> Document {
         polys.push(poly2);
         segments.push(segment);
     }
-    let mut document = document;
-    for segment in segments {
-        document = document.add(draw_line(segment.line));
-    };
+    polys
+}
+
+fn main() {
+    let polys = break_glass(1000);
+    let mut document = Document::new()
+        .set(
+            "viewBox",
+            (0, 0, SIZE * 2 + OFFSET * 2, SIZE * 2 + OFFSET * 2),
+        );
     for poly in polys {
         if poly.closed {
             document = document.add(draw_poly(&poly).unwrap());
         }
     }
-    document
-}
-
-fn main() {
-    let circle = Circle::new()
-        .set("cx", SIZE + OFFSET)
-        .set("cy", SIZE + OFFSET)
-        .set("r", SIZE)
-        .set("fill", "none")
-        .set("stroke", "black")
-        .set("stroke-width", 2);
-
-    let document = Document::new()
-        .set(
-            "viewBox",
-            (0, 0, SIZE * 2 + OFFSET * 2, SIZE * 2 + OFFSET * 2),
-        )
-        .add(circle);
-
-    let document = break_glass(document, 1000);
-
     svg::save("image.svg", &document).unwrap();
 }
