@@ -10,7 +10,7 @@ use rand::Rng;
 
 use std::f64::consts::PI;
 
-const SIZE: u64 = 400;
+const SIZE: u64 = 1600;
 const OFFSET: u64 = 20;
 const COLOR_JITTER: i16 = 64;
 
@@ -422,7 +422,7 @@ fn main() {
         .set("d", background_box);
     document = document.add(background);
 
-    let polys = break_glass(1000);
+    let polys = break_glass(16000);
     for poly in polys {
         if poly.closed {
             document = document.add(draw_poly(&poly).unwrap());
