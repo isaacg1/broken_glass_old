@@ -8,9 +8,11 @@ extern crate rand;
 use rand::{Rng, SeedableRng, StdRng};
 
 extern crate clap;
-use clap::{Arg, App};
+use clap::{App, Arg};
 
 use std::f64::consts::PI;
+
+use std::collections::{HashMap, HashSet};
 
 type Point = (f64, f64);
 type Line = (Point, Point);
@@ -22,7 +24,11 @@ fn transform(p: Point, size: u64, offset: u64) -> Point {
 
 fn draw_poly(poly: &Poly, size: u64, offset: u64) -> Option<Path> {
     if poly.closed {
-        let mut data = Data::new().move_to(transform(poly.lines_and_segment_indexes[0].0 .0, size, offset));
+        let mut data = Data::new().move_to(transform(
+            poly.lines_and_segment_indexes[0].0 .0,
+            size,
+            offset,
+        ));
         for &(line, _) in &poly.lines_and_segment_indexes {
             data = data.line_to(transform(line.1, size, offset));
         }
@@ -31,9 +37,7 @@ fn draw_poly(poly: &Poly, size: u64, offset: u64) -> Option<Path> {
         let poly_color = poly.color.unwrap();
         let color = format!(
             "#{:02X}{:02X}{:02X}",
-            poly_color.0,
-            poly_color.1,
-            poly_color.2
+            poly_color.0, poly_color.1, poly_color.2
         );
         assert_eq!(color.len(), 7);
         let path = Path::new()
@@ -110,6 +114,61 @@ fn random_segment<R: Rng>(line: Line, segments: &[Segment], rng: &mut R) -> Segm
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+struct PolyIndex(usize);
+
+struct PolySet {
+    all_polys: Vec<Poly>,
+    active_polys: HashSet<PolyIndex>,
+    segments_to_polys: HashMap<usize, HashSet<PolyIndex>>,
+}
+
+impl PolySet {
+    fn new() -> Self {
+        Self {
+            all_polys: Vec::new(),
+            active_polys: HashSet::new(),
+            segments_to_polys: HashMap::new(),
+        }
+    }
+    fn add(&mut self, poly: Poly) {
+        let poly_index = PolyIndex(self.all_polys.len());
+        self.active_polys.insert(poly_index);
+        for &(_, segment) in &poly.lines_and_segment_indexes {
+            self.segments_to_polys
+                .entry(segment)
+                .or_insert(HashSet::new())
+                .insert(poly_index);
+        }
+        self.all_polys.push(poly);
+    }
+    fn find(&self, segment: usize) -> HashSet<PolyIndex> {
+        self.segments_to_polys.get(&segment).unwrap().clone()
+    }
+    fn lookup(&self, index: PolyIndex) -> &Poly {
+        assert!(self.active_polys.contains(&index));
+        self.all_polys.get(index.0).unwrap()
+    }
+    fn remove_all(&mut self, indexes: &Vec<PolyIndex>) -> Vec<Poly> {
+        indexes
+            .iter()
+            .map(|index| {
+                let was_there = self.active_polys.remove(index);
+                assert!(was_there);
+                let poly = self.all_polys.get(index.0).unwrap().clone();
+                poly.lines_and_segment_indexes.iter().for_each(|&(_, segment)| {
+                    let was_there = self.segments_to_polys.get_mut(&segment).unwrap().remove(index);
+                    assert!(was_there);
+                });
+                poly
+            })
+            .collect()
+    }
+    fn active(self) -> Vec<Poly> {
+        self.active_polys.iter().map(|index| self.all_polys.get(index.0).unwrap().clone()).collect()
+    }
+}
+
 type Color = (u8, u8, u8);
 // Lines overlap, curling left (ccw)
 #[derive(Clone, Debug)]
@@ -127,7 +186,13 @@ fn jitter<R: Rng>(color_channel: u8, age: f64, rng: &mut R, color_jitter: u8) ->
 }
 
 impl Poly {
-    fn add_color<R: Rng>(&mut self, maybe_old_color: Option<Color>, age: f64, rng: &mut R, color_jitter: u8) {
+    fn add_color<R: Rng>(
+        &mut self,
+        maybe_old_color: Option<Color>,
+        age: f64,
+        rng: &mut R,
+        color_jitter: u8,
+    ) {
         assert!(self.color.is_none());
         self.color = Some(if let Some(old_color) = maybe_old_color {
             (
@@ -153,36 +218,37 @@ fn on_left_side(line: Line, point: Point) -> bool {
     distance > 0.
 }
 
-fn surrounding_poly_index(segment: &Segment, polys: &[Poly]) -> Vec<usize> {
+fn pop_surrounding_polys(segment: &Segment, polys: &mut PolySet) -> Vec<Poly> {
     if segment.low_x_neighbor_index.is_none() && segment.high_x_neighbor_index.is_none() {
         vec![]
     } else {
-        let surroundings: Vec<usize> = polys
-            .iter()
-            .enumerate()
-            .filter(|&(_, poly)| {
-                [
-                    (segment.low_x_neighbor_index, segment.line),
-                    (segment.high_x_neighbor_index, reverse(segment.line)),
-                ].into_iter()
-                    .any(|&(maybe_neighbor_index, line_into_poly)| {
-                        maybe_neighbor_index.map_or(false, |neighbor_index| {
-                            poly.lines_and_segment_indexes.iter().any(|&(line,
-                               segment_index)| {
-                                segment_index == neighbor_index &&
-                                    between(line.0 .0, line_into_poly.0 .0, line.1 .0) &&
-                                    on_left_side(line, line_into_poly.1)
+        let surroundings: Vec<PolyIndex> = [
+            (segment.low_x_neighbor_index, segment.line),
+            (segment.high_x_neighbor_index, reverse(segment.line)),
+        ].into_iter()
+            .flat_map(|&(maybe_neighbor_index, line_into_poly)| {
+                maybe_neighbor_index.iter().flat_map(|&neighbor_index| {
+                    polys.find(neighbor_index).iter().filter(|&&poly_index| {
+                        polys
+                            .lookup(poly_index)
+                            .lines_and_segment_indexes
+                            .iter()
+                            .any(|&(line, segment_index)| {
+                                segment_index == neighbor_index
+                                    && between(line.0 .0, line_into_poly.0 .0, line.1 .0)
+                                    && on_left_side(line, line_into_poly.1)
                             })
-                        })
-                    })
+                    }).cloned().collect::<Vec<PolyIndex>>()
+                }).collect::<Vec<PolyIndex>>()
             })
-            .map(|(i, _)| i)
+            .collect::<HashSet<PolyIndex>>()
+            .into_iter()
             .collect();
         assert!(
-            surroundings.len() == 2 && segment.low_x_neighbor_index.is_some() &&
-                segment.high_x_neighbor_index.is_some() || surroundings.len() == 1
+            surroundings.len() == 2 && segment.low_x_neighbor_index.is_some()
+                && segment.high_x_neighbor_index.is_some() || surroundings.len() == 1
         );
-        surroundings
+        polys.remove_all(&surroundings)
     }
 }
 
@@ -195,12 +261,10 @@ fn split_3<T: Copy>(vec: &[T], index: usize) -> (&[T], T, &[T]) {
 fn split_poly(segment: &Segment, segment_index: usize, surrounding_polys: &[Poly]) -> (Poly, Poly) {
     match surrounding_polys.len() {
         0 => {
-            let new_poly = |line: Line| {
-                Poly {
-                    lines_and_segment_indexes: vec![(line, segment_index)],
-                    closed: false,
-                    color: None,
-                }
+            let new_poly = |line: Line| Poly {
+                lines_and_segment_indexes: vec![(line, segment_index)],
+                closed: false,
+                color: None,
             };
             (new_poly(segment.line), new_poly(reverse(segment.line)))
         }
@@ -257,16 +321,16 @@ fn split_poly(segment: &Segment, segment_index: usize, surrounding_polys: &[Poly
                 (inner_poly, outer_poly)
             } else {
                 assert!(!poly.closed);
-                let (index, line_into_poly) =
-                    if let Some(low_index) = segment.low_x_neighbor_index {
-                        assert!(segment.high_x_neighbor_index.is_none());
-                        (low_index, segment.line)
-                    } else {
-                        (
-                            segment.high_x_neighbor_index.unwrap(),
-                            reverse(segment.line),
-                        )
-                    };
+                let (index, line_into_poly) = if let Some(low_index) = segment.low_x_neighbor_index
+                {
+                    assert!(segment.high_x_neighbor_index.is_none());
+                    (low_index, segment.line)
+                } else {
+                    (
+                        segment.high_x_neighbor_index.unwrap(),
+                        reverse(segment.line),
+                    )
+                };
                 let pos = poly.lines_and_segment_indexes
                     .iter()
                     .position(|&(_line, segment_index)| segment_index == index)
@@ -310,8 +374,7 @@ fn split_poly(segment: &Segment, segment_index: usize, surrounding_polys: &[Poly
                     for (out_index, &(line, poly_index)) in
                         poly.lines_and_segment_indexes.iter().enumerate()
                     {
-                        if target_poly_index == poly_index &&
-                            between(line.0 .0, point.0, line.1 .0)
+                        if target_poly_index == poly_index && between(line.0 .0, point.0, line.1 .0)
                         {
                             poly_index_points.push((poly, out_index, point))
                         }
@@ -351,9 +414,14 @@ fn split_poly(segment: &Segment, segment_index: usize, surrounding_polys: &[Poly
     }
 }
 
-fn break_glass(n: usize, num_segments: usize, color_jitter: u8, maybe_seed: Option<usize>) -> Vec<Poly> {
+fn break_glass(
+    n: usize,
+    num_segments: usize,
+    color_jitter: u8,
+    maybe_seed: Option<usize>,
+) -> Vec<Poly> {
     let mut segments = vec![];
-    let mut polys = vec![];
+    let mut poly_set = PolySet::new();
     let mut rng: StdRng = if let Some(seed) = maybe_seed {
         let random_seed: &[usize] = &[0, 0, 0, seed];
         SeedableRng::from_seed(random_seed)
@@ -363,10 +431,7 @@ fn break_glass(n: usize, num_segments: usize, color_jitter: u8, maybe_seed: Opti
     for i in 0..num_segments {
         let line = random_line(&mut rng);
         let segment = random_segment(line, &segments, &mut rng);
-        let maybe_index = surrounding_poly_index(&segment, &polys);
-        let surrounding_polys: Vec<Poly> =
-            // Must be reversed so we don't remove the wrong one
-            maybe_index.into_iter().rev().map(|i| polys.remove(i)).collect();
+        let surrounding_polys = pop_surrounding_polys(&segment, &mut poly_set);
         let (mut poly1, mut poly2) = split_poly(&segment, segments.len(), &surrounding_polys);
         let maybe_old_color = if surrounding_polys.len() == 1 {
             surrounding_polys[0].color
@@ -376,11 +441,11 @@ fn break_glass(n: usize, num_segments: usize, color_jitter: u8, maybe_seed: Opti
         let age = i as f64 / n as f64;
         poly1.add_color(maybe_old_color, age, &mut rng, color_jitter);
         poly2.add_color(maybe_old_color, age, &mut rng, color_jitter);
-        polys.push(poly1);
-        polys.push(poly2);
+        poly_set.add(poly1);
+        poly_set.add(poly2);
         segments.push(segment);
     }
-    polys
+    poly_set.active()
 }
 
 fn draw_glass(
@@ -392,12 +457,7 @@ fn draw_glass(
     seed: Option<usize>,
 ) {
     let width = size * 2 + offset * 2;
-    let mut document = Document::new().set("viewBox", (
-        0,
-        0,
-        width,
-        width,
-    ));
+    let mut document = Document::new().set("viewBox", (0, 0, width, width));
     let background_box = Data::new()
         .move_to((0, 0))
         .line_by((0, width))
@@ -426,28 +486,63 @@ fn main() {
                 .help("Sets the output file to write the image to")
                 .required(true),
         )
-        .arg(Arg::with_name("size").short("s").takes_value(true).help(
-            "Radius of the circle",
-        ))
-        .arg(Arg::with_name("offset").short("o").takes_value(true).help(
-            "Offset distance from the edge of the circle to the edge of the image",
-        ))
-        .arg(Arg::with_name("segments").short("n").takes_value(true).help(
-            "Number of segments to draw",
-        ))
-        .arg(Arg::with_name("seed").short("r").takes_value(true).help(
-            "Random seed to use, if any",
-        ))
-        .arg(Arg::with_name("jitter").short("j").takes_value(true).help(
-            "Amount of color jitter to begin with",
-        ))
+        .arg(
+            Arg::with_name("size")
+                .short("s")
+                .takes_value(true)
+                .help("Radius of the circle"),
+        )
+        .arg(
+            Arg::with_name("offset")
+                .short("o")
+                .takes_value(true)
+                .help("Offset distance from the edge of the circle to the edge of the image"),
+        )
+        .arg(
+            Arg::with_name("segments")
+                .short("n")
+                .takes_value(true)
+                .help("Number of segments to draw"),
+        )
+        .arg(
+            Arg::with_name("seed")
+                .short("r")
+                .takes_value(true)
+                .help("Random seed to use, if any"),
+        )
+        .arg(
+            Arg::with_name("jitter")
+                .short("j")
+                .takes_value(true)
+                .help("Amount of color jitter to begin with"),
+        )
         .get_matches();
 
     let output_file = matches.value_of("OUTPUT").unwrap();
-    let size = matches.value_of("size").map_or(800, |size_str| size_str.parse().expect("Size should be a nonnegative integer"));
-    let offset = matches.value_of("offset").map_or(20, |offset_str| offset_str.parse().expect("Offset should be a nonnegative integer"));
-    let num_segments = matches.value_of("segments").map_or(4000, |segments_str| segments_str.parse().expect("Number of segments should be a nonnegative integer"));
-    let seed = matches.value_of("seed").map(|seed_str| seed_str.parse().expect("Random seed should be a nonnegative integer"));
-    let color_jitter = matches.value_of("jitter").map_or(64, |jitter_str| jitter_str.parse().expect("Color jitter should be a nonnegative integer"));
+    let size = matches.value_of("size").map_or(800, |size_str| {
+        size_str
+            .parse()
+            .expect("Size should be a nonnegative integer")
+    });
+    let offset = matches.value_of("offset").map_or(20, |offset_str| {
+        offset_str
+            .parse()
+            .expect("Offset should be a nonnegative integer")
+    });
+    let num_segments = matches.value_of("segments").map_or(4000, |segments_str| {
+        segments_str
+            .parse()
+            .expect("Number of segments should be a nonnegative integer")
+    });
+    let seed = matches.value_of("seed").map(|seed_str| {
+        seed_str
+            .parse()
+            .expect("Random seed should be a nonnegative integer")
+    });
+    let color_jitter = matches.value_of("jitter").map_or(64, |jitter_str| {
+        jitter_str
+            .parse()
+            .expect("Color jitter should be a nonnegative integer")
+    });
     draw_glass(output_file, size, offset, num_segments, color_jitter, seed);
 }
