@@ -75,7 +75,7 @@ fn intersection(l0: Line, l1: Line) -> Point {
 }
 
 fn between(a: f64, b: f64, c: f64) -> bool {
-    a <= b && b <= c || a >= b && b >= c
+    (a < b) == (b < c)
 }
 
 fn reverse(line: Line) -> Line {
@@ -117,10 +117,13 @@ fn random_segment<R: Rng>(line: Line, segments: &[Segment], rng: &mut R) -> Segm
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 struct PolyIndex(usize);
 
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct LineIndex(usize);
+
 struct PolySet {
     all_polys: Vec<Poly>,
     active_polys: HashSet<PolyIndex>,
-    segments_to_polys: HashMap<usize, HashSet<PolyIndex>>,
+    segments_to_polys: HashMap<usize, HashSet<(PolyIndex, LineIndex)>>,
 }
 
 impl PolySet {
@@ -134,38 +137,46 @@ impl PolySet {
     fn add(&mut self, poly: Poly) {
         let poly_index = PolyIndex(self.all_polys.len());
         self.active_polys.insert(poly_index);
-        for &(_, segment) in &poly.lines_and_segment_indexes {
+        for (line_index, &(_, segment)) in poly.lines_and_segment_indexes.iter().enumerate() {
             self.segments_to_polys
                 .entry(segment)
-                .or_insert(HashSet::new())
-                .insert(poly_index);
+                .or_insert_with(HashSet::new)
+                .insert((poly_index, LineIndex(line_index)));
         }
         self.all_polys.push(poly);
     }
-    fn find(&self, segment: usize) -> HashSet<PolyIndex> {
-        self.segments_to_polys.get(&segment).unwrap().clone()
+    fn find(&self, segment: usize) -> HashSet<(PolyIndex, LineIndex)> {
+        self.segments_to_polys[&segment].clone()
     }
     fn lookup(&self, index: PolyIndex) -> &Poly {
         assert!(self.active_polys.contains(&index));
-        self.all_polys.get(index.0).unwrap()
+        &self.all_polys[index.0]
     }
-    fn remove_all(&mut self, indexes: &Vec<PolyIndex>) -> Vec<Poly> {
+    fn remove_all(&mut self, indexes: &[PolyIndex]) -> Vec<Poly> {
         indexes
             .iter()
-            .map(|index| {
-                let was_there = self.active_polys.remove(index);
+            .map(|&index| {
+                let was_there = self.active_polys.remove(&index);
                 assert!(was_there);
-                let poly = self.all_polys.get(index.0).unwrap().clone();
-                poly.lines_and_segment_indexes.iter().for_each(|&(_, segment)| {
-                    let was_there = self.segments_to_polys.get_mut(&segment).unwrap().remove(index);
-                    assert!(was_there);
-                });
+                let poly = self.all_polys[index.0].clone();
+                poly.lines_and_segment_indexes.iter().enumerate().for_each(
+                    |(line_index, &(_, segment))| {
+                        let was_there = self.segments_to_polys
+                            .get_mut(&segment)
+                            .unwrap()
+                            .remove(&(index, LineIndex(line_index)));
+                        assert!(was_there);
+                    },
+                );
                 poly
             })
             .collect()
     }
     fn active(self) -> Vec<Poly> {
-        self.active_polys.iter().map(|index| self.all_polys.get(index.0).unwrap().clone()).collect()
+        self.active_polys
+            .iter()
+            .map(|index| self.all_polys[index.0].clone())
+            .collect()
     }
 }
 
@@ -227,19 +238,24 @@ fn pop_surrounding_polys(segment: &Segment, polys: &mut PolySet) -> Vec<Poly> {
             (segment.high_x_neighbor_index, reverse(segment.line)),
         ].into_iter()
             .flat_map(|&(maybe_neighbor_index, line_into_poly)| {
-                maybe_neighbor_index.iter().flat_map(|&neighbor_index| {
-                    polys.find(neighbor_index).iter().filter(|&&poly_index| {
+                maybe_neighbor_index
+                    .iter()
+                    .flat_map(|&neighbor_index| {
                         polys
-                            .lookup(poly_index)
-                            .lines_and_segment_indexes
+                            .find(neighbor_index)
                             .iter()
-                            .any(|&(line, segment_index)| {
+                            .filter(|&&(poly_index, ref line_index)| {
+                                let (line, segment_index) = polys
+                                    .lookup(poly_index)
+                                    .lines_and_segment_indexes[line_index.0];
                                 segment_index == neighbor_index
                                     && between(line.0 .0, line_into_poly.0 .0, line.1 .0)
                                     && on_left_side(line, line_into_poly.1)
                             })
-                    }).cloned().collect::<Vec<PolyIndex>>()
-                }).collect::<Vec<PolyIndex>>()
+                            .map(|&(poly_index, _)| poly_index)
+                            .collect::<Vec<PolyIndex>>()
+                    })
+                    .collect::<Vec<PolyIndex>>()
             })
             .collect::<HashSet<PolyIndex>>()
             .into_iter()
@@ -484,7 +500,7 @@ fn main() {
         .arg(
             Arg::with_name("OUTPUT")
                 .help("Sets the output file to write the image to")
-                .required(true),
+//                .required(true),
         )
         .arg(
             Arg::with_name("size")
@@ -518,7 +534,7 @@ fn main() {
         )
         .get_matches();
 
-    let output_file = matches.value_of("OUTPUT").unwrap();
+    let output_file = matches.value_of("OUTPUT").unwrap_or("image.svg");
     let size = matches.value_of("size").map_or(800, |size_str| {
         size_str
             .parse()
