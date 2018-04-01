@@ -74,7 +74,7 @@ fn intersection(l0: Line, l1: Line) -> Point {
     (numx / denom, numy / denom)
 }
 
-fn between(a: f64, b: f64, c: f64) -> bool {
+fn between(a: Point, b: Point, c: Point) -> bool {
     (a < b) == (b < c)
 }
 
@@ -93,7 +93,7 @@ fn random_segment<R: Rng>(line: Line, segments: &[Segment], rng: &mut R) -> Segm
     let mut endpoint_options = vec![(line.0, None), (line.1, None)];
     for (index, oth_seg) in segments.iter().enumerate() {
         let i_point = intersection(line, oth_seg.line);
-        if between(oth_seg.line.0 .0, i_point.0, oth_seg.line.1 .0) {
+        if between(oth_seg.line.0, i_point, oth_seg.line.1) {
             endpoint_options.push((i_point, Some(index)))
         }
     }
@@ -249,7 +249,7 @@ fn pop_surrounding_polys(segment: &Segment, polys: &mut PolySet) -> Vec<Poly> {
                                     .lookup(poly_index)
                                     .lines_and_segment_indexes[line_index.0];
                                 segment_index == neighbor_index
-                                    && between(line.0 .0, line_into_poly.0 .0, line.1 .0)
+                                    && between(line.0, line_into_poly.0, line.1)
                                     && on_left_side(line, line_into_poly.1)
                             })
                             .map(|&(poly_index, _)| poly_index)
@@ -390,7 +390,7 @@ fn split_poly(segment: &Segment, segment_index: usize, surrounding_polys: &[Poly
                     for (out_index, &(line, poly_index)) in
                         poly.lines_and_segment_indexes.iter().enumerate()
                     {
-                        if target_poly_index == poly_index && between(line.0 .0, point.0, line.1 .0)
+                        if target_poly_index == poly_index && between(line.0, point, line.1)
                         {
                             poly_index_points.push((poly, out_index, point))
                         }
